@@ -5,8 +5,6 @@ import Footer from '../components/Footer.jsx';
 import { getToken } from '../auth.js';
 import './Prescription.css';
 
-const TEST_USER_LOCATION = [16.5045, 80.6540];
-
 const MAX_EDGE = 1600;
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
 
@@ -841,12 +839,25 @@ export default function Prescription() {
   ] = useState('');
 
   const [center, setCenter] =
-    useState(
-      TEST_USER_LOCATION
-    );
+    useState(null);
 
   const [radius, setRadius] =
     useState(5000);
+
+  const [locating, setLocating] =
+    useState(false);
+
+  const [
+    locationAccuracy,
+    setLocationAccuracy,
+  ] = useState(null);
+
+  const [
+    locationMessage,
+    setLocationMessage,
+  ] = useState(
+    'Location is required to search nearby pharmacies.'
+  );
 
   const [loading, setLoading] =
     useState(false);
@@ -903,6 +914,212 @@ export default function Prescription() {
   };
 
   /* =======================================================
+     LOCATION
+     ======================================================= */
+
+  const useCurrentLocation = () => {
+    if (!navigator.geolocation) {
+      setLocationMessage(
+        'Location is not supported by this browser.'
+      );
+
+      setError(
+        'Your browser does not support location access. Try a modern browser or enable location services.'
+      );
+
+      return;
+    }
+
+    setLocating(true);
+    setError('');
+    setLocationMessage(
+      'Improving location accuracy...'
+    );
+
+    let bestPosition = null;
+    let finished = false;
+
+    const finishWithPosition = (
+      position,
+      message
+    ) => {
+      if (
+        finished ||
+        !position
+      ) {
+        return;
+      }
+
+      const lat =
+        Number(position.coords.latitude);
+
+      const lon =
+        Number(position.coords.longitude);
+
+      if (
+        !Number.isFinite(lat) ||
+        !Number.isFinite(lon)
+      ) {
+        return;
+      }
+
+      finished = true;
+
+      navigator.geolocation.clearWatch(
+        watchId
+      );
+
+      clearTimeout(timeoutId);
+
+      setCenter([lat, lon]);
+
+      const accuracy =
+        Number(position.coords.accuracy);
+
+      const roundedAccuracy =
+        Number.isFinite(accuracy)
+          ? Math.round(accuracy)
+          : null;
+
+      setLocationAccuracy(
+        roundedAccuracy
+      );
+
+      setLocationMessage(
+        message ||
+          'Current location detected successfully.'
+      );
+
+      setLocating(false);
+    };
+
+    const watchId =
+      navigator.geolocation.watchPosition(
+        (position) => {
+          const accuracy =
+            Number(
+              position.coords.accuracy
+            );
+
+          if (
+            !bestPosition ||
+            (Number.isFinite(accuracy) &&
+              accuracy <
+                Number(
+                  bestPosition.coords
+                    .accuracy
+                ))
+          ) {
+            bestPosition = position;
+          }
+
+          if (
+            Number.isFinite(accuracy) &&
+            accuracy <= 80
+          ) {
+            finishWithPosition(
+              position,
+              'High-accuracy location detected.'
+            );
+          } else if (
+            Number.isFinite(accuracy)
+          ) {
+            setLocationMessage(
+              `Improving location accuracy... currently about ${Math.round(
+                accuracy
+              )} m.`
+            );
+          }
+        },
+        (locationError) => {
+          if (finished) {
+            return;
+          }
+
+          let message =
+            'Could not access your current location. Please try again.';
+
+          if (locationError.code === 1) {
+            message =
+              'Location permission was denied. Allow precise location access in your browser or device settings, then try again.';
+          } else if (
+            locationError.code === 2
+          ) {
+            message =
+              'Your current location is unavailable. Turn on device location services and try again.';
+          } else if (
+            locationError.code === 3
+          ) {
+            message =
+              'Location detection timed out. Please try again.';
+          }
+
+          if (bestPosition) {
+            finishWithPosition(
+              bestPosition,
+              'Using the best location accuracy available from this device.'
+            );
+
+            return;
+          }
+
+          finished = true;
+
+          navigator.geolocation.clearWatch(
+            watchId
+          );
+
+          clearTimeout(timeoutId);
+
+          setLocating(false);
+          setLocationMessage(
+            'Location has not been detected.'
+          );
+          setError(message);
+        },
+        {
+          enableHighAccuracy: true,
+          maximumAge: 0,
+          timeout: 15000,
+        }
+      );
+
+    const timeoutId = setTimeout(
+      () => {
+        if (finished) {
+          return;
+        }
+
+        if (bestPosition) {
+          finishWithPosition(
+            bestPosition,
+            'Using the best location accuracy available from this device.'
+          );
+
+          return;
+        }
+
+        finished = true;
+
+        navigator.geolocation.clearWatch(
+          watchId
+        );
+
+        setLocating(false);
+
+        setLocationMessage(
+          'Location has not been detected.'
+        );
+
+        setError(
+          'We could not get a reliable location from this device. Check browser location permission and device location services, then try again.'
+        );
+      },
+      15000
+    );
+  };
+
+  /* =======================================================
      ANALYSE
      ======================================================= */
 
@@ -930,6 +1147,18 @@ export default function Prescription() {
     ) {
       setError(
         'Please enter a valid patient age between 0 and 120.'
+      );
+      return;
+    }
+
+    if (
+      !Array.isArray(center) ||
+      center.length !== 2 ||
+      !Number.isFinite(center[0]) ||
+      !Number.isFinite(center[1])
+    ) {
+      setError(
+        'Please click "Use my location" before scanning so we can search nearby pharmacies.'
       );
       return;
     }
@@ -1414,19 +1643,30 @@ export default function Prescription() {
 
                     <button
                       type="button"
-                      className="rx2-location-button"
-                      onClick={() =>
-                        setCenter(
-                          TEST_USER_LOCATION
-                        )
-                      }
+                      className={`rx2-location-button ${
+                        center ? 'ready' : ''
+                      }`}
+                      onClick={useCurrentLocation}
+                      disabled={locating}
                     >
-                      <Icon
-                        name="location"
-                        size={16}
-                      />
+                      {locating ? (
+                        <span className="rx2-location-spinner" />
+                      ) : (
+                        <Icon
+                          name={
+                            center
+                              ? 'check'
+                              : 'location'
+                          }
+                          size={16}
+                        />
+                      )}
 
-                      Use my location
+                      {locating
+                        ? 'Detecting location...'
+                        : center
+                          ? 'Update my location'
+                          : 'Use my location'}
                     </button>
 
                     <label className="rx2-radius">
@@ -1472,6 +1712,36 @@ export default function Prescription() {
 
                     </label>
 
+                  </div>
+
+                  <div
+                    className={`rx2-location-status ${
+                      center ? 'ready' : 'idle'
+                    }`}
+                  >
+                    <Icon
+                      name={
+                        center
+                          ? 'check'
+                          : 'location'
+                      }
+                      size={14}
+                    />
+
+                    <span>
+                      {center
+                        ? `${locationMessage}${
+                            locationAccuracy
+                              ? ` Accuracy about ${locationAccuracy} m.`
+                              : ''
+                          }${
+                            locationAccuracy &&
+                            locationAccuracy > 100
+                              ? ' This device is providing an approximate location rather than GPS-level precision.'
+                              : ''
+                          }`
+                        : locationMessage}
+                    </span>
                   </div>
 
                 </div>
@@ -1548,11 +1818,13 @@ export default function Prescription() {
                 <p>
                   Your prescription image is
                   processed for analysis.
-                  Avoid uploading unrelated
-                  personal information and
-                  review the original
-                  prescription before acting
-                  on scanned results.
+                  Your browser location is
+                  used to search nearby
+                  pharmacies. Avoid uploading
+                  unrelated personal
+                  information and review the
+                  original prescription before
+                  acting on scanned results.
                 </p>
               </div>
 
